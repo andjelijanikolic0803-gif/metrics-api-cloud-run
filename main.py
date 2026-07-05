@@ -63,6 +63,7 @@ def health_check():
     return {
         "status": "ok",
         "environment": APP_ENV,
+        "version": "1.1.0",
         "time": datetime.now(timezone.utc).isoformat(),
     }
 
