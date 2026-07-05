@@ -1,0 +1,63 @@
+name: Deploy to Cloud Run
+
+# Workflow se pokreće automatski pri svakom push-u na main granu
+on:
+  push:
+    branches:
+      - main
+
+env:
+  PROJECT_ID: cloud-projekat-501519
+  REGION: europe-west1
+  REPOSITORY: metrics-api-repo
+  IMAGE_NAME: metrics-api
+  SERVICE_NAME: metrics-api
+  # Workload Identity Federation podaci (nisu tajni, sigurno je da stoje ovde)
+  WORKLOAD_IDENTITY_PROVIDER: projects/208047819335/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+  SERVICE_ACCOUNT: github-actions-deployer@cloud-projekat-501519.iam.gserviceaccount.com
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    # Neophodno za Workload Identity Federation autentifikaciju
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Preuzmi kod iz repozitorijuma
+        uses: actions/checkout@v4
+
+      - name: Autentifikacija na Google Cloud (bez ključeva - Workload Identity Federation)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+
+      - name: Podesi gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Podesi Docker da koristi Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+
+      - name: Push image na Artifact Registry
+        run: |
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Deploy na Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --region=${{ env.REGION }} \
+            --allow-unauthenticated \
+            --port=8080 \
+            --min-instances=0 \
+            --max-instances=3 \
+            --set-env-vars=APP_ENV=production,ERROR_RATE=0.3 \
+            --set-secrets=API_KEY=api-key:latest
